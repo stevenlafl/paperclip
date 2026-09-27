@@ -191,6 +191,33 @@ describeEmbeddedPostgres("issue queued-comment routes", () => {
     return { companyId, agentId, issueId, runId, wakeId, commentIds };
   }
 
+  it("keeps queued comments from the agent's current run on that task until its next turn delivers them", async () => {
+    const seeded = await seedQueue();
+    const [queuedFirst, queuedSecond] = seeded.commentIds;
+    const visibleId = randomUUID();
+    await db.insert(issueComments).values({ id: visibleId, companyId: seeded.companyId, issueId: seeded.issueId,
+      authorType: "user", authorUserId: "queue-owner", body: "Delivered earlier",
+      createdAt: new Date("2026-08-22T14:00:00.000Z"), updatedAt: new Date("2026-08-22T14:00:00.000Z") });
+    const agent = app(seeded.companyId, "queue-owner", { agentId: seeded.agentId, runId: seeded.runId });
+
+    const listed = await request(agent).get(`/api/issues/${seeded.issueId}/comments`).expect(200);
+    expect(listed.body.map((comment: { id: string }) => comment.id)).toEqual([visibleId]);
+    await request(agent).get(`/api/issues/${seeded.issueId}/comments/${queuedSecond}`).expect(404);
+    const context = await request(agent).get(`/api/issues/${seeded.issueId}/heartbeat-context`).expect(200);
+    expect(context.body.commentCursor).toMatchObject({ totalComments: 1, latestCommentId: visibleId });
+
+    // The board, and the same agent working another task, still see pending comments.
+    const board = await request(app(seeded.companyId)).get(`/api/issues/${seeded.issueId}/comments`).expect(200);
+    expect(board.body.map((comment: { id: string }) => comment.id)).toEqual(
+      expect.arrayContaining([queuedFirst, queuedSecond, visibleId]));
+    const otherRunId = randomUUID();
+    await db.insert(heartbeatRuns).values({ id: otherRunId, companyId: seeded.companyId, agentId: seeded.agentId,
+      status: "running", contextSnapshot: { issueId: randomUUID() } });
+    const fromOtherTask = await request(app(seeded.companyId, "queue-owner", { agentId: seeded.agentId, runId: otherRunId }))
+      .get(`/api/issues/${seeded.issueId}/comments`).expect(200);
+    expect(fromOtherTask.body).toHaveLength(3);
+  });
+
   it.each(["cancelled", "running"])("rejects a late Done from an interrupted %s task run at the write boundary", async status => {
     const seeded = await seedQueue();
     await db.update(heartbeatRuns).set({ status, resultJson: { executionCancellation: { state: "requested" } } })

@@ -1,4 +1,5 @@
 import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractionResponse } from "../services/queued-interaction-response.js";
+import { commentIdsQueuedForActingRun } from "../services/queued-comment-visibility.js";
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
 import {
@@ -8606,7 +8607,8 @@ export function issueRoutes(
     ] = await Promise.all([
       resolveIssueProjectAndGoal(issue),
       svc.getAncestors(issue.id),
-      svc.getCommentCursor(issue.id),
+      commentIdsQueuedForActor(req, issue).then((excludeCommentIds) =>
+        svc.getCommentCursor(issue.id, { excludeCommentIds })),
       wakeCommentId ? svc.getComment(wakeCommentId) : null,
       svc.getRelationSummaries(issue.id),
       svc
@@ -15364,6 +15366,14 @@ export function issueRoutes(
     res.json(result);
   });
 
+  /** Comments queued for this agent's next turn on the issue its current run is executing. */
+  function commentIdsQueuedForActor(req: Request, issue: { companyId: string; id: string }) {
+    if (req.actor.type !== "agent" || !req.actor.agentId) return Promise.resolve(new Set<string>());
+    return commentIdsQueuedForActingRun(db, {
+      companyId: issue.companyId, issueId: issue.id, agentId: req.actor.agentId, runId: req.actor.runId,
+    });
+  }
+
   router.get("/issues/:id/comments", async (req, res) => {
     const id = req.params.id as string;
     const issue = await getAccessibleResource(
@@ -15394,11 +15404,13 @@ export function issueRoutes(
       limitRaw && Number.isFinite(limitRaw) && limitRaw > 0
         ? Math.min(Math.floor(limitRaw), MAX_ISSUE_COMMENT_LIMIT)
         : null;
-    const comments = await svc.listComments(id, {
-      afterCommentId,
-      order,
-      limit,
-    });
+    const [allComments, queued] = await Promise.all([
+      svc.listComments(id, { afterCommentId, order, limit }),
+      commentIdsQueuedForActor(req, issue),
+    ]);
+    const comments = queued.size
+      ? allComments.filter((comment) => !queued.has(comment.id))
+      : allComments;
     res.json(
       await runRedactions.redactForIssue(issue.companyId, issue.id, comments),
     );
@@ -16978,7 +16990,7 @@ export function issueRoutes(
     if (!issue) return;
     if (!(await assertIssueReadAllowed(req, res, issue))) return;
     const comment = await svc.getComment(commentId);
-    if (!comment || comment.issueId !== id) {
+    if (!comment || comment.issueId !== id || (await commentIdsQueuedForActor(req, issue)).has(comment.id)) {
       res.status(404).json({ error: "Comment not found" });
       return;
     }
