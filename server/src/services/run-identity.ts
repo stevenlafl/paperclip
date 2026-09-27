@@ -12,6 +12,7 @@ import {
 import { conflict, forbidden } from "../errors.js";
 import { isUuidLike } from "@paperclipai/shared";
 import { queuedCommentIdsFromRunContext, queuedCommentIdsFromWakePayload } from "./issue-queued-comment-queue.js";
+import { queuedInteractionId, readQueuedInteractionResponse } from "./queued-interaction-response.js";
 
 /** Resolve an explicit click from persisted receipts, never caller context or message authors. */
 export async function explicitOperatorRunIdentity(
@@ -45,7 +46,14 @@ export async function explicitOperatorRunIdentity(
   const actorId = marker && typeof marker === "object" && "actorId" in marker ? marker.actorId : null;
   const ids = queuedCommentIdsFromWakePayload(receipt?.payload);
   const deliveredIds = queuedCommentIdsFromRunContext(run.contextSnapshot);
-  if (typeof actorId !== "string" || !actorId || !ids.length ||
+  // A resolved card is delivered by its interaction, not by comment ids. The
+  // run must carry that interaction, and it must still be resolved as queued.
+  const interactionId = !ids.length ? queuedInteractionId(receipt?.payload) : null;
+  const deliveredInteraction = interactionId !== null &&
+    run.contextSnapshot?.interactionId === interactionId &&
+    await readQueuedInteractionResponse(executor as Db, run.companyId,
+      String(receipt?.payload?.issueId), receipt?.payload) !== null;
+  if (typeof actorId !== "string" || !actorId || !(ids.length || deliveredInteraction) ||
       receipt?.payload?.issueId !== run.contextSnapshot?.issueId ||
       !ids.every(id => deliveredIds.includes(id)) ||
       request.requestedByActorType !== "user" || request.requestedByActorId !== actorId) {
