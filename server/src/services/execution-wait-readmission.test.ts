@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import {
-  agentWakeupRequests, agents, companies, createDb, heartbeatRuns, issueComments, issues,
+  agentWakeupRequests, agents, companies, createDb, heartbeatRuns, issueComments, issueRecoveryActions, issues,
 } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase, getEmbeddedPostgresTestSupport } from "../__tests__/helpers/embedded-postgres.js";
 import { getExecutionBlocker } from "./execution-blocker.js";
@@ -61,6 +61,23 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(parked).toMatchObject({ status: "deferred_issue_execution" });
     expect(parked.payload?.executionWait).toBeTruthy();
     return parked;
+  }
+
+  // Park the wait behind a settled no-replay recovery action on the same run,
+  // the hold a cancelled continuation leaves behind.
+  async function holdByRecoveryAction(f: Awaited<ReturnType<typeof seed>>, parked: Awaited<ReturnType<typeof park>>) {
+    const [action] = await db.insert(issueRecoveryActions).values({
+      companyId: f.companyId, sourceIssueId: f.issueId, kind: "active_run_watchdog", status: "resolved",
+      outcome: "blocked", ownerType: "board", returnOwnerAgentId: f.agentId, cause: "uncertain_external_action",
+      fingerprint: f.sourceRunId, nextAction: "Preserve recorded work without replay.",
+      evidence: { runId: f.sourceRunId, automaticRecovery: { replay: "blocked", actionOutcome: "unknown" } },
+    }).returning();
+    await db.update(agentWakeupRequests).set({
+      payload: { ...parked.payload, executionWait: {
+        ...(parked.payload?.executionWait ?? {}), recoveryActionId: action!.id } },
+    }).where(eq(agentWakeupRequests.id, parked.id));
+    expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toMatchObject({ recoveryActionId: action!.id });
+    return action!;
   }
 
   const makeDue = (id: string) => db.update(agentWakeupRequests)
@@ -193,7 +210,28 @@ const support = await getEmbeddedPostgresTestSupport();
     expect(guarded).toHaveLength(1);
   });
 
-  it.each(["closed_issue", "reassigned_issue", "held_execution", "recovery_backed", "too_recent"])(
+  it("re-admits a wait backed by a recovery action once that action stops holding the issue", async () => {
+    const f = await seed();
+    const parked = await park(f);
+    await clearGate(f.sourceRunId);
+    const action = await holdByRecoveryAction(f, parked);
+
+    // Recording the operator's decision retires the no-replay hold.
+    await db.update(issueRecoveryActions).set({
+      evidence: { ...action.evidence, automaticRecovery: { replay: "explicit_user_continuation", actionOutcome: "unknown" } },
+    }).where(eq(issueRecoveryActions.id, action.id));
+    expect(await getExecutionBlocker(db, f.companyId, f.issueId)).toBeNull();
+    await makeDue(parked.id);
+    await heartbeatService(db).readmitUnblockedExecutionWaits();
+
+    expect(await queuedRuns(f.companyId)).toHaveLength(1);
+    expect((await db.select().from(agentWakeupRequests)
+      .where(eq(agentWakeupRequests.id, parked.id)))[0].status).toBe("skipped");
+    await heartbeatService(db).readmitUnblockedExecutionWaits();
+    expect(await queuedRuns(f.companyId)).toHaveLength(1);
+  });
+
+  it.each(["closed_issue", "reassigned_issue", "held_execution", "recovery_held", "too_recent"])(
     "leaves a parked wake alone: %s", async kind => {
       const f = await seed();
       const parked = await park(f);
@@ -210,13 +248,10 @@ const support = await getEmbeddedPostgresTestSupport();
       if (kind === "held_execution") {
         await db.update(issues).set({ executionRunId: f.sourceRunId }).where(eq(issues.id, f.issueId));
       }
-      if (kind === "recovery_backed") {
-        // A wait behind a recorded recovery action belongs to
-        // `resumeExecutionWaitComments`; this pass must not step over it.
-        await db.update(agentWakeupRequests).set({
-          payload: { ...parked.payload, executionWait: {
-            ...(parked.payload?.executionWait ?? {}), recoveryActionId: randomUUID() } },
-        }).where(eq(agentWakeupRequests.id, parked.id));
+      if (kind === "recovery_held") {
+        // A recovery action that still holds the issue is the gate itself;
+        // `resumeExecutionWaitComments` owns that wait, not this pass.
+        await holdByRecoveryAction(f, parked);
       }
       if (kind !== "too_recent") await makeDue(parked.id);
 
