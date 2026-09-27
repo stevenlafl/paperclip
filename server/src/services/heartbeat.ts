@@ -10496,13 +10496,15 @@ export function heartbeatService(
   /**
    * Re-admit a wake that was parked by a gate which has since disappeared.
    *
-   * `resumeExecutionWaitComments` only sees waits backed by a recovery action.
-   * A conversation-ownership gate has none: `getExecutionBlocker` returns it
-   * with `recoveryActionId: null`, decided purely by the liveness of the former
-   * owner's process. That process exits seconds after its run row is finalized,
-   * and nothing re-reads the gate afterwards, so the wake keeps
+   * `resumeExecutionWaitComments` only sees waits whose recovery action still
+   * holds the issue. A conversation-ownership gate has none: `getExecutionBlocker`
+   * returns it with `recoveryActionId: null`, decided purely by the liveness of
+   * the former owner's process. That process exits seconds after its run row is
+   * finalized, and nothing re-reads the gate afterwards, so the wake keeps
    * `deferred_issue_execution` for the life of the task while the task itself
-   * sits in `todo` looking like ordinary queued work.
+   * sits in `todo` looking like ordinary queued work. A wait parked behind a
+   * recovery action is stranded the same way once that action stops holding:
+   * it drops out of the recovery-backed sweep and nothing else reconsiders it.
    *
    * This pass hands such a wake back to ordinary admission once the gate is
    * demonstrably gone: the same call the original trigger made, with the same
@@ -10521,10 +10523,10 @@ export function heartbeatService(
         eq(agentWakeupRequests.status, "deferred_issue_execution"),
         sql`${agentWakeupRequests.payload}->'executionWait' is not null`,
         sql`${agentWakeupRequests.payload}->'queuedCommentInterrupt' is null`,
-        // Only the gate that leaves no recovery action behind. A wait backed by
-        // a recovery action is `resumeExecutionWaitComments`'s to resume, and
-        // its action is the record of work this pass must not step over.
-        sql`${agentWakeupRequests.payload}->'executionWait'->>'recoveryActionId' is null`,
+        // A wait backed by a recovery action is included: the gate check below
+        // skips it while the action still holds, which leaves it to
+        // `resumeExecutionWaitComments`, and re-admits it once the action no
+        // longer holds the issue.
         // A live holder of the execution lock is the gate itself, not a stale
         // receipt. Only a fully released task is reconsidered here.
         isNull(issues.executionRunId),
