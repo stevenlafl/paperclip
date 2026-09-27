@@ -106,6 +106,52 @@ const support = await getEmbeddedPostgresTestSupport();
     },
   );
 
+  // A resolved card sent now carries its interaction, never comment ids.
+  async function seedCardInterrupt() {
+    const input = await seed();
+    const queueId = randomUUID(), wakeupRequestId = randomUUID(), interactionId = randomUUID();
+    await db.insert(issueThreadInteractions).values({ id: interactionId, companyId: input.companyId,
+      issueId: input.issueId, kind: "ask_user_questions", status: "answered", resolvedByUserId: "operator",
+      resolvedAt: new Date(), payload: { version: 1, questions: [] } as never });
+    const contextSnapshot = { issueId: input.issueId, interactionId, interactionStatus: "answered" };
+    await db.insert(agentWakeupRequests).values([
+      { id: queueId, companyId: input.companyId, agentId: input.agentId, source: "automation",
+        status: "coalesced", runId: input.runId, requestedByActorType: "user", requestedByActorId: "operator",
+        payload: { issueId: input.issueId, mutation: "interaction", interactionId, interactionStatus: "answered",
+          _paperclipWakeContext: { interactionId, interactionStatus: "answered" },
+          queuedCommentInterrupt: { actorId: "operator", requestedAt: new Date().toISOString() } } },
+      { id: wakeupRequestId, companyId: input.companyId, agentId: input.agentId, source: "on_demand",
+        status: "queued", runId: input.runId, requestedByActorType: "user", requestedByActorId: "operator",
+        idempotencyKey: `queued-comment-interrupt:${queueId}` },
+    ]);
+    await db.update(heartbeatRuns).set({ wakeupRequestId, contextSnapshot }).where(eq(heartbeatRuns.id, input.runId));
+    return { ...input, queueId, wakeupRequestId, interactionId, contextSnapshot };
+  }
+
+  it("accepts a card answer sent with Interrupt on the clicking operator's authority", async () => {
+    const input = await seedCardInterrupt();
+    const identity = await initializeRunIdentity(db, { ...input, responsibleUserId: "A", cause: "dispatch" });
+    expect(identity).toMatchObject({ responsibleUserId: "operator", cause: "queued_comment_interrupt" });
+  });
+
+  it.each(["other-interaction", "reopened-card", "other-actor"])(
+    "rejects %s card interrupt authority before creating any execution identity", async (fault) => {
+      const input = await seedCardInterrupt();
+      if (fault === "other-interaction") {
+        await db.update(heartbeatRuns).set({ contextSnapshot: { ...input.contextSnapshot, interactionId: randomUUID() } })
+          .where(eq(heartbeatRuns.id, input.runId));
+      } else if (fault === "reopened-card") {
+        await db.update(issueThreadInteractions).set({ status: "pending" })
+          .where(eq(issueThreadInteractions.id, input.interactionId));
+      } else {
+        await db.update(agentWakeupRequests).set({ requestedByActorId: "someone-else" })
+          .where(eq(agentWakeupRequests.id, input.wakeupRequestId));
+      }
+      await expect(initializeRunIdentity(db, { ...input, responsibleUserId: "A", cause: "dispatch" })).rejects.toThrow("interrupt authority");
+      expect(await listRunIdentityContexts(db, input.companyId, input.runId)).toHaveLength(0);
+    },
+  );
+
   it("holds acquisition during uncertain steering, preserves snapshots, and never rewinds on replay", async () => {
     const input = await seed();
     await initializeRunIdentity(db, { ...input, messageIds: [input.messageIds[0]], responsibleUserId: "A", cause: "instruction" });
