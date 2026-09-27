@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { HttpError, unprocessable } from "../errors.js";
-import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rename, rm } from "node:fs/promises";
+import { resolveManagedAiHomeDir } from "../home-paths.js";
 import os from "node:os";
 import path from "node:path";
 import { and, eq } from "drizzle-orm";
@@ -241,6 +242,12 @@ export async function prepareManagedAiRuntime(
     allowUninstalledPersonal?: boolean;
     allowUninstalledShared?: boolean;
     allowLegacyValidation?: boolean;
+    /**
+     * Keep one home per agent and grant across runs instead of a temporary one,
+     * so the provider's own session state (Claude transcripts, Codex threads)
+     * survives and the next run can resume. Only agent runs ask for this.
+     */
+    persistentHome?: boolean;
     config: Record<string, unknown>;
   },
 ) {
@@ -274,6 +281,7 @@ export async function prepareManagedAiRuntime(
   });
   const subscriptionSelected = selection.attribution.method === "subscription";
   let home: string | undefined;
+  let persistent = false;
   try {
     const selectedGrantId = selection.grant.id;
     selection = await service.select({
@@ -296,14 +304,20 @@ export async function prepareManagedAiRuntime(
     const subscriptionFile =
       subscriptionSelected &&
       (input.binding.provider !== "anthropic" || isClaudeCredentialDocument(value));
-    home = await mkdtemp(
-      path.join(
-        os.tmpdir(),
-        `paperclip-ai-${input.companyId}-${selection.grant.id}-`,
-      ),
-    );
+    if (input.persistentHome) {
+      home = resolveManagedAiHomeDir(input.companyId, input.agentId, selection.grant.id);
+      persistent = true;
+    } else {
+      home = await mkdtemp(
+        path.join(
+          os.tmpdir(),
+          `paperclip-ai-${input.companyId}-${selection.grant.id}-`,
+        ),
+      );
+    }
     const providerHome = path.join(home, "provider");
-    await mkdir(providerHome, { mode: 0o700 });
+    await mkdir(providerHome, { recursive: true, mode: 0o700 });
+    const runFiles = randomUUID();
     const env: Record<string, unknown> = {
       ...stripAiAuthBindings(input.config.env),
       ...Object.fromEntries(AI_AUTH_ENV_KEYS.map((key) => [key, ""])),
@@ -325,8 +339,10 @@ export async function prepareManagedAiRuntime(
         'cli_auth_credentials_store = "file"\n',
         { mode: 0o600 },
       );
-    if (subscriptionFile) await writeFile(authFile, value, { mode: 0o600 });
-    else env[capability.envKey] = value;
+    if (subscriptionFile) {
+      if (persistent) await seedCredentialFile(input.binding.provider, authFile, value);
+      else await writeFile(authFile, value, { mode: 0o600 });
+    } else env[capability.envKey] = value;
     if (
       input.binding.provider === "openai" &&
       selection.attribution.method === "api_key"
@@ -400,19 +416,25 @@ export async function prepareManagedAiRuntime(
                 const current = await aiConnectionService(
                   tx as unknown as Db,
                 ).credential({ ...selection, grant });
+                // A persistent home is shared by the agent's concurrent runs,
+                // so compare this run's snapshot through files of its own.
                 const destination = path.join(
                   providerHome,
-                  "current-auth.json",
+                  persistent ? `current-auth-${runFiles}.json` : "current-auth.json",
                 );
                 await writeFile(destination, current, { mode: 0o600 });
+                const source = persistent
+                  ? path.join(providerHome, `refreshed-auth-${runFiles}.json`)
+                  : authFile;
+                if (persistent) await writeFile(source, refreshed, { mode: 0o600 });
                 const decision =
                   input.binding.provider === "anthropic"
                     ? decideClaudeAuthMerge(refreshed, current)
                     : input.binding.provider === "openai"
-                      ? await decideCodexAuthMerge(authFile, destination, {
+                      ? await decideCodexAuthMerge(source, destination, {
                           errorLabel: "AI account refresh",
                         })
-                      : await decideGrokAuthMerge(authFile, destination, {
+                      : await decideGrokAuthMerge(source, destination, {
                           errorLabel: "AI account refresh",
                         });
                 if (decision !== 10) return;
@@ -428,12 +450,49 @@ export async function prepareManagedAiRuntime(
               });
           }
         } finally {
-          if (home) await rm(home, { recursive: true, force: true });
+          if (persistent) {
+            for (const name of [`current-auth-${runFiles}.json`, `refreshed-auth-${runFiles}.json`])
+              await rm(path.join(providerHome, name), { force: true });
+          } else if (home) await rm(home, { recursive: true, force: true });
         }
       },
     };
   } catch (error) {
-    if (home) await rm(home, { recursive: true, force: true });
+    if (home && !persistent) await rm(home, { recursive: true, force: true });
     throw error;
+  }
+}
+
+/**
+ * Put the stored credential into a persistent home without replacing a newer
+ * copy there: a concurrent run of the same agent may have refreshed it and not
+ * written it back yet. The same merge predicates as the write-back decide.
+ */
+async function seedCredentialFile(
+  provider: AiConnectionBinding["provider"],
+  authFile: string,
+  value: string,
+): Promise<void> {
+  let existing: string | null = null;
+  try {
+    existing = await readFile(authFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  if (existing === value) return;
+  const incoming = `${authFile}.incoming-${randomUUID()}`;
+  await writeFile(incoming, value, { mode: 0o600 });
+  try {
+    const decision =
+      existing === null
+        ? 10
+        : provider === "anthropic"
+          ? decideClaudeAuthMerge(value, existing)
+          : provider === "openai"
+            ? await decideCodexAuthMerge(incoming, authFile, { errorLabel: "AI account seed" })
+            : await decideGrokAuthMerge(incoming, authFile, { errorLabel: "AI account seed" });
+    if (decision === 10) await rename(incoming, authFile);
+  } finally {
+    await rm(incoming, { force: true });
   }
 }

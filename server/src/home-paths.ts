@@ -55,6 +55,15 @@ export function resolveDefaultAgentWorkspaceDir(agentId: string): string {
   return path.resolve(resolvePaperclipInstanceRoot(), "workspaces", trimmed);
 }
 
+export function resolveManagedAiHomeDir(companyId: string, agentId: string, grantId: string): string {
+  for (const segment of [companyId, agentId, grantId]) {
+    if (!PATH_SEGMENT_RE.test(segment)) {
+      throw new Error(`Invalid id for managed AI home path '${segment}'.`);
+    }
+  }
+  return path.resolve(resolvePaperclipInstanceRoot(), "companies", companyId, "agents", agentId, "ai-homes", grantId);
+}
+
 function sanitizeFriendlyPathSegment(value: string | null | undefined, fallback = "_default"): string {
   const trimmed = value?.trim() ?? "";
   if (!trimmed) return fallback;
