@@ -882,12 +882,17 @@ describeEmbeddedPostgres("heartbeat stale queued-run invalidation", () => {
 
       await heartbeat.resumeQueuedRuns();
       await waitForCondition(async () => {
-        const run = await db
-          .select({ status: heartbeatRuns.status })
-          .from(heartbeatRuns)
-          .where(eq(heartbeatRuns.id, runId))
-          .then((rows) => rows[0] ?? null);
-        return run?.status === "succeeded";
+        const [run, wakeup] = await Promise.all([
+          db.select({ status: heartbeatRuns.status })
+            .from(heartbeatRuns)
+            .where(eq(heartbeatRuns.id, runId))
+            .then((rows) => rows[0] ?? null),
+          db.select({ status: agentWakeupRequests.status })
+            .from(agentWakeupRequests)
+            .where(eq(agentWakeupRequests.id, wakeupRequestId))
+            .then((rows) => rows[0] ?? null),
+        ]);
+        return run?.status === "succeeded" && wakeup?.status === "completed";
       }, 10_000);
 
       const [run, wakeup, issue] = await Promise.all([
