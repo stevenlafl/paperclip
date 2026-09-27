@@ -966,7 +966,7 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
     const issueId = randomUUID(), previousRunId = randomUUID(), runId = randomUUID();
     await seedIssue({ companyId, issueId, status: "blocked", assigneeAgentId: agentId });
     await db.insert(heartbeatRuns).values([
-      { id: previousRunId, companyId, agentId, status: "interrupted", errorCode: "server_shutdown_interrupted", contextSnapshot: { issueId } },
+      { id: previousRunId, companyId, agentId, status: "interrupted", errorCode: "server_shutdown_interrupted", contextSnapshot: { issueId }, nextEventSeq: 2 },
       { id: runId, companyId, agentId, status: "queued", contextSnapshot: { issueId, wakeReason: "issue_commented" } },
     ]);
     await db.insert(heartbeatRunEvents).values({ companyId, agentId, runId: previousRunId,
@@ -998,7 +998,8 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
     const issueId = randomUUID(), previousRunId = randomUUID();
     await seedIssue({ companyId, issueId, status: "blocked", assigneeAgentId: agentId });
     await db.insert(heartbeatRuns).values({ id: previousRunId, companyId, agentId,
-      status: "interrupted", errorCode: "server_shutdown_interrupted", contextSnapshot: { issueId } });
+      status: "interrupted", errorCode: "server_shutdown_interrupted", contextSnapshot: { issueId },
+      nextEventSeq: historicalAdapter ? 2 : 1 });
     if (historicalAdapter) await db.insert(heartbeatRunEvents).values({ companyId, agentId, runId: previousRunId,
       seq: 1, eventType: "adapter.invoke", payload: { adapterType: historicalAdapter } });
     const [action] = await db.insert(issueRecoveryActions).values({ companyId, sourceIssueId: issueId,
