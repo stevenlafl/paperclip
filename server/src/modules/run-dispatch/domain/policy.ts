@@ -156,6 +156,13 @@ export type QueuedRunFacts = {
   continuationParkApplies: boolean;
   /** The pre-classified verdict on whatever continuation summary body applies; only meaningful when continuationParkApplies is true. */
   continuationParksExecutor: boolean;
+  /**
+   * True when the issue still has a real review posture: a live review request,
+   * a pending thread interaction, or an open approval for review of this issue's
+   * own work. The summary's Next Action is a hint that can outlive the review it
+   * describes, so it never cancels a continuation on its own.
+   */
+  continuationReviewPostureLive: boolean;
   continuationSummaryBody: string | null;
   wakeReason: string | null;
   retryReason: string | null;
@@ -544,7 +551,7 @@ export function decideQueuedRunStaleness(
     }
   }
 
-  if (facts.continuationParkApplies && facts.continuationParksExecutor) {
+  if (facts.continuationParkApplies && facts.continuationParksExecutor && facts.continuationReviewPostureLive) {
     return {
       stale: true,
       errorCode: "issue_continuation_waiting_on_review",

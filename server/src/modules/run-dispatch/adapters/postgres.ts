@@ -66,6 +66,9 @@ import type {
 } from "../application/types.js";
 import { RunDispatchApplicationError } from "../application/types.js";
 
+/** Approval kinds that review this issue's own current work and so may hold its continuation. */
+const ISSUE_WORK_REVIEW_APPROVAL_TYPES = ["request_board_approval"];
+
 type HeartbeatRun = typeof heartbeatRuns.$inferSelect;
 type LoadGateFactsInput = {
   conversationContinuation: boolean;
@@ -502,6 +505,44 @@ export function createPostgresRunDispatchAdapter(
     }));
   }
 
+  // A parked summary is an LLM-authored hint that can outlive the review it
+  // describes. Only a real review posture may cancel a continuation: a live
+  // review request, a pending thread interaction, or an open approval for
+  // review of this issue's own work. Approvals linked to the issue for
+  // provenance (hiring, budget overrides, credential grants) do not count.
+  async function hasLiveIssueReviewPosture(
+    dbOrTx: Db,
+    companyId: string,
+    issue: { id: string; executionState: unknown },
+  ): Promise<boolean> {
+    if (parseIssueExecutionState(issue.executionState)?.reviewRequest) return true;
+    const [pendingInteraction, pendingApproval] = await Promise.all([
+      dbOrTx
+        .select({ id: issueThreadInteractions.id })
+        .from(issueThreadInteractions)
+        .where(and(
+          eq(issueThreadInteractions.companyId, companyId),
+          eq(issueThreadInteractions.issueId, issue.id),
+          eq(issueThreadInteractions.status, "pending"),
+        ))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+      dbOrTx
+        .select({ id: issueApprovals.approvalId })
+        .from(issueApprovals)
+        .innerJoin(approvals, eq(issueApprovals.approvalId, approvals.id))
+        .where(and(
+          eq(issueApprovals.companyId, companyId),
+          eq(issueApprovals.issueId, issue.id),
+          inArray(approvals.status, ["pending", "revision_requested"]),
+          inArray(approvals.type, ISSUE_WORK_REVIEW_APPROVAL_TYPES),
+        ))
+        .limit(1)
+        .then((rows) => rows[0] ?? null),
+    ]);
+    return Boolean(pendingInteraction || pendingApproval);
+  }
+
   async function loadStalenessFacts(
     input: LoadStalenessFactsInput,
     _now: Date,
@@ -560,6 +601,9 @@ export function createPostgresRunDispatchAdapter(
       continuationSummaryBody = queuedContinuationSummary ?? currentContinuationSummary?.body ?? null;
       continuationParksExecutor = continuationSummaryParksExecutor(continuationSummaryBody);
     }
+    const continuationReviewPostureLive = issue && continuationParksExecutor
+      ? await hasLiveIssueReviewPosture(dbOrTx, input.companyId, issue)
+      : false;
 
     const recoveryActionId = readNonEmptyString(context.recoveryActionId);
     const isAuthorizedSourceScopedRecovery =
@@ -610,6 +654,7 @@ export function createPostgresRunDispatchAdapter(
       wakeCommentIdPresent: Boolean(wakeCommentId),
       continuationParkApplies,
       continuationParksExecutor,
+      continuationReviewPostureLive,
       continuationSummaryBody,
       wakeReason,
       retryReason,

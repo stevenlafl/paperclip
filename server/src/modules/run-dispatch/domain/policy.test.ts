@@ -60,6 +60,7 @@ function baseStalenessFacts(): QueuedRunFacts {
     wakeCommentIdPresent: false,
     continuationParkApplies: false,
     continuationParksExecutor: false,
+    continuationReviewPostureLive: false,
     continuationSummaryBody: null,
     wakeReason: null,
     retryReason: null,
@@ -343,6 +344,7 @@ describe("decideQueuedRunStaleness", () => {
       overrides: {
         continuationParkApplies: true,
         continuationParksExecutor: true,
+        continuationReviewPostureLive: true,
         continuationSummaryBody: "Waiting for reviewer approval before continuing.",
         wakeReason: "issue_continuation_needed",
       } satisfies Partial<QueuedRunFacts>,
@@ -404,6 +406,18 @@ describe("decideQueuedRunStaleness", () => {
       ...baseStalenessFacts(),
       continuationParkApplies: true,
       continuationParksExecutor: false,
+    };
+    expect(decideQueuedRunStaleness(facts, NOW)).toEqual({ stale: false });
+  });
+
+  it("does not cancel on a parked continuation summary when no review is still live", () => {
+    const facts: QueuedRunFacts = {
+      ...baseStalenessFacts(),
+      continuationParkApplies: true,
+      continuationParksExecutor: true,
+      continuationReviewPostureLive: false,
+      continuationSummaryBody: "Wait for reviewer feedback or approval before continuing executor work.",
+      wakeReason: "issue_continuation_needed",
     };
     expect(decideQueuedRunStaleness(facts, NOW)).toEqual({ stale: false });
   });

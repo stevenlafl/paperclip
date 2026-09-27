@@ -4,12 +4,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import {
   activityLog,
   agents,
+  approvals,
   companies,
   createDb,
   documentRevisions,
   documents,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueApprovals,
   issueDocuments,
   issueRelations,
   issueRecoveryActions,
@@ -52,6 +54,8 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
 
   afterEach(async () => {
     await db.delete(activityLog);
+    await db.delete(issueApprovals);
+    await db.delete(approvals);
     await db.delete(issueDocuments);
     await db.delete(documentRevisions);
     await db.delete(documents);
@@ -651,7 +655,7 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
       15_000,
     );
 
-    it("maps a review-parking continuation summary into a stale queued-run decision", async () => {
+    async function cancelParkedContinuation(approvalType: string | null) {
       const { companyId, agentId } = await seedCompanyAndAgent();
       const issueId = randomUUID();
       await seedIssue({ companyId, issueId, status: "in_progress", assigneeAgentId: agentId });
@@ -667,9 +671,14 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
           "- Wait for reviewer feedback or approval before continuing executor work.",
         ].join("\n"),
       });
+      if (approvalType) {
+        const [approval] = await db.insert(approvals)
+          .values({ companyId, type: approvalType, status: "pending", payload: {} })
+          .returning();
+        await db.insert(issueApprovals).values({ companyId, issueId, approvalId: approval!.id });
+      }
 
       const adapter = createPostgresRunDispatchAdapter(db);
-      const now = new Date();
       const runId = await seedRun({
         companyId,
         agentId,
@@ -679,17 +688,26 @@ describeEmbeddedPostgres("run-dispatch postgres adapter", () => {
           retryReason: "issue_continuation_needed",
         },
       });
-      const result = await adapter.cancelStaleQueuedRun({
+      return adapter.cancelStaleQueuedRun({
         runId,
         companyId,
         expectedStatus: "queued",
-        now,
+        now: new Date(),
       });
+    }
 
-      expect(result).toMatchObject({
+    it("maps a review-parking continuation summary into a stale queued-run decision while review is live", async () => {
+      expect(await cancelParkedContinuation("request_board_approval")).toMatchObject({
         outcome: "cancelled",
         errorCode: "issue_continuation_waiting_on_review",
       });
+    });
+
+    it.each([
+      { name: "no review posture", approvalType: null },
+      { name: "an approval linked only for provenance", approvalType: "hire_agent" },
+    ])("keeps a review-parking continuation summary runnable with $name", async ({ approvalType }) => {
+      expect(await cancelParkedContinuation(approvalType)).toMatchObject({ outcome: "not_stale" });
     });
   });
 
