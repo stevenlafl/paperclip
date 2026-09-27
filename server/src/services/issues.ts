@@ -11948,7 +11948,11 @@ export function issueService(db: Db) {
       );
     },
 
-    getCommentCursor: async (issueId: string) => {
+    getCommentCursor: async (issueId: string, options?: { excludeCommentIds?: Iterable<string> }) => {
+      const excluded = [...(options?.excludeCommentIds ?? [])];
+      const visible = excluded.length
+        ? and(eq(issueComments.issueId, issueId), notInArray(issueComments.id, excluded))
+        : eq(issueComments.issueId, issueId);
       const [latest, countRow] = await Promise.all([
         db
           .select({
@@ -11956,7 +11960,7 @@ export function issueService(db: Db) {
             latestCommentAt: issueComments.createdAt,
           })
           .from(issueComments)
-          .where(eq(issueComments.issueId, issueId))
+          .where(visible)
           .orderBy(desc(issueComments.createdAt), desc(issueComments.id))
           .limit(1)
           .then((rows) => rows[0] ?? null),
@@ -11965,7 +11969,7 @@ export function issueService(db: Db) {
             totalComments: sql<number>`count(*)::int`,
           })
           .from(issueComments)
-          .where(eq(issueComments.issueId, issueId))
+          .where(visible)
           .then((rows) => rows[0] ?? null),
       ]);
 
