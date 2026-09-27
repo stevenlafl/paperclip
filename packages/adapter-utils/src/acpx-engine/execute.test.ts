@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpRuntimeOptions } from "acpx/runtime";
+import { createRuntimeStore } from "acpx/runtime";
 import type { AdapterExecutionContext, AdapterRuntimeMcpAccess } from "@paperclipai/adapter-utils";
 import {
   DEFAULT_REMOTE_SANDBOX_ADAPTER_TIMEOUT_SEC,
@@ -674,6 +675,35 @@ describe("shared ACPX engine runtime behavior", () => {
     expect(resumedPrompt).toContain(JSON.stringify(changedMessage));
     expect(resumedPrompt).not.toContain(messages[0]!.body);
     expect(resumedPrompt).toContain('"kind":"task_history_delta"');
+  });
+
+  it("marks the persisted ACPX record for a fresh session when the saved session cannot be resumed", async () => {
+    const root = await makeTempRoot();
+    const config = { agent: "claude", cwd: root, stateDir: path.join(root, "state"), mode: "persistent" };
+    const context = { taskId: "issue-1" };
+    const fresh = await runExecutor(config, { context });
+    const params = fresh.result.sessionParams as Record<string, unknown>;
+    const sessionKey = String(params.sessionKey);
+    // The provider session acpx would otherwise resume: a record under the same key.
+    const store = createRuntimeStore({ stateDir: String(params.stateDir) });
+    const now = new Date().toISOString();
+    await store.save({
+      schema: "acpx.session.v1", acpxRecordId: sessionKey, acpSessionId: "full-context-session",
+      agentCommand: "claude-agent-acp", cwd: root, name: sessionKey, createdAt: now, lastUsedAt: now, lastSeq: 0,
+      eventLog: { active_path: path.join(root, "events.ndjson"), segment_count: 1, max_segment_bytes: 1024,
+        max_segments: 1, last_write_error: null },
+      closed: true, title: null, messages: [], updated_at: now, cumulative_token_usage: {}, request_token_usage: {},
+    } as unknown as Parameters<typeof store.save>[0]);
+
+    const resumed = await runExecutor(config, { context, runtime: { sessionParams: params } });
+    expect(resumed.sessionInputs[0]?.resumeSessionId).toBe(fresh.result.sessionId);
+    expect((await store.load(sessionKey))?.acpx?.reset_on_next_ensure).toBeUndefined();
+
+    // Reset and rotation arrive without saved session params, under the same key.
+    const reset = await runExecutor(config, { context });
+    expect(reset.sessionInputs[0]?.sessionKey).toBe(sessionKey);
+    expect(reset.sessionInputs[0]?.resumeSessionId).toBeUndefined();
+    expect((await store.load(sessionKey))?.acpx?.reset_on_next_ensure).toBe(true);
   });
 
   it.each([
