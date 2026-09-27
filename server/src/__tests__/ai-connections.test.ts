@@ -4,7 +4,7 @@ import { issueRecoveryActionService } from "../services/issue-recovery-actions.j
 import * as localCredentials from "../services/local-ai-credentials.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
@@ -97,6 +97,50 @@ describe("managed AI connections", () => {
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("");
       expect(await readFile(path.join(env.CLAUDE_CONFIG_DIR, ".credentials.json"), "utf8")).toBe(document);
     } finally { await run.cleanup(); }
+  });
+
+  it("keeps one home per agent and grant across runs so the next run can resume its provider session", async () => {
+    // Claude Code keeps session transcripts under CLAUDE_CONFIG_DIR/projects and
+    // Codex keeps its threads in CODEX_HOME. A home deleted after every run
+    // leaves the next run nothing to resume, and a new path each run changes
+    // the session fingerprint.
+    const userId = "claude-persistent-user";
+    await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+    const document = JSON.stringify({ claudeAiOauth: { accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: 1000 } });
+    await service.save(companyId, userId, { provider: "anthropic", method: "subscription", ownership: "personal", name: "Claude persistent", loginSessionId: "fixture", allAgents: true, agentIds: [] }, document);
+    const runInput = { ...input, binding: { provider: "anthropic", method: "subscription", mode: "responsible_user" } as const, responsibleUserId: userId, persistentHome: true, config: { env: {} } };
+    const first = await prepareManagedAiRuntime(db, runInput);
+    const firstEnv = first.config.env as Record<string, string>;
+    const transcript = path.join(firstEnv.CLAUDE_CONFIG_DIR, "projects", "workspace", "session-1.jsonl");
+    await mkdir(path.dirname(transcript), { recursive: true });
+    await writeFile(transcript, "turn 1\n");
+    await first.cleanup();
+    const second = await prepareManagedAiRuntime(db, runInput);
+    try {
+      const secondEnv = second.config.env as Record<string, string>;
+      expect(secondEnv.HOME).toBe(firstEnv.HOME);
+      expect(secondEnv.CLAUDE_CONFIG_DIR).toBe(firstEnv.CLAUDE_CONFIG_DIR);
+      expect(path.relative(home, secondEnv.HOME).startsWith("..")).toBe(false);
+      expect(await readFile(transcript, "utf8")).toBe("turn 1\n");
+      expect(await readFile(path.join(secondEnv.CLAUDE_CONFIG_DIR, ".credentials.json"), "utf8")).toBe(document);
+    } finally { await second.cleanup(); }
+  });
+
+  it("does not replace a newer credential that a concurrent run left in the persistent home", async () => {
+    const userId = "claude-persistent-concurrent-user";
+    await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+    const stored = JSON.stringify({ claudeAiOauth: { accessToken: "stored-access", refreshToken: "stored-refresh", expiresAt: 1000 } });
+    const refreshed = JSON.stringify({ claudeAiOauth: { accessToken: "refreshed-access", refreshToken: "refreshed-refresh", expiresAt: 5000 } });
+    await service.save(companyId, userId, { provider: "anthropic", method: "subscription", ownership: "personal", name: "Claude concurrent", loginSessionId: "fixture", allAgents: true, agentIds: [] }, stored);
+    const runInput = { ...input, binding: { provider: "anthropic", method: "subscription", mode: "responsible_user" } as const, responsibleUserId: userId, persistentHome: true, config: { env: {} } };
+    const running = await prepareManagedAiRuntime(db, runInput);
+    const credentials = path.join((running.config.env as Record<string, string>).CLAUDE_CONFIG_DIR, ".credentials.json");
+    // The running CLI refreshed its token; its write-back has not happened yet.
+    await writeFile(credentials, refreshed);
+    const starting = await prepareManagedAiRuntime(db, runInput);
+    try {
+      expect(await readFile(credentials, "utf8")).toBe(refreshed);
+    } finally { await Promise.all([running.cleanup(), starting.cleanup()]); }
   });
 
   it("has one provider default across methods, retains unavailable defaults and honors explicit account methods", async () => {
