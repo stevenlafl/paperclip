@@ -281,7 +281,6 @@ async function renderForm(
       mutations: { retry: false },
     },
   });
-  const onSave = vi.fn();
 
   await act(async () => {
     root.render(
@@ -3650,7 +3649,6 @@ describe("AgentConfigForm Role field", () => {
   let roots: Root[] = [];
 
   beforeEach(() => {
-    mockAgentsApi.adapterModelProfiles.mockResolvedValue([]);
     mockAgentsApi.adapterModels.mockResolvedValue([]);
     mockAgentsApi.detectModel.mockResolvedValue(null);
     mockAgentsApi.list.mockResolvedValue([]);
