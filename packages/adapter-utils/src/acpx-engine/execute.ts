@@ -4206,6 +4206,17 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         flushChildStderr(childStderrState);
         childStderrState.logPath = prepared.childStderrLogPath;
         const persistedRuntimeStore = createRuntimeStore({ stateDir: prepared.stateDir });
+        // Session reset and rotation clear the saved session params, and a
+        // credential or config change makes them incompatible. The session key
+        // stays the same, and acpx reuses any persisted record under it when no
+        // resume id is given, which would resume the very provider session this
+        // run is meant to replace. Mark that record so ensureSession starts fresh.
+        if (!canResume) {
+          const stale = await persistedRuntimeStore.load(prepared.sessionKey);
+          if (stale && stale.acpx?.reset_on_next_ensure !== true) {
+            await persistedRuntimeStore.save({ ...stale, acpx: { ...stale.acpx, reset_on_next_ensure: true } });
+          }
+        }
         const runtimeStore: AcpSessionStore = {
           async load(id) {
             const record = await persistedRuntimeStore.load(id);
