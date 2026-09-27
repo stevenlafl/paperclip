@@ -31,7 +31,8 @@ All environment variables that Paperclip uses for server configuration.
 
 Daytona connectivity for `paperclip_runner` uses authenticated provider
 WebSocket ingress and follows the instance experimental setting
-`enableNativeRunner` (default `false`). There is no separate ingress opt-in.
+`enableNativeRunner` (default `true` on self-hosted instances; cloud-managed
+instances keep it off). There is no separate ingress opt-in.
 Disabling Paperclip Runner blocks fresh native starts while persisted native
 runs retain their recovery path. The deprecated `enableRunnerPreviewIngress`
 key remains accepted in stored and managed configuration for version-skew
