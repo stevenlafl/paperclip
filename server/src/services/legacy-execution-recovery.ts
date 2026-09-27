@@ -14,7 +14,7 @@ export const LEGACY_RECOVERY_CAUSE = "legacy_execution_requires_reconciliation";
 
 /** Error families describe availability, not whether earlier actions happened. */
 export function legacyExecutionNeedsReconciliation(
-  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot">>,
+  run: Pick<Run, "runtimeMode" | "status" | "errorCode" | "resultJson"> & Partial<Pick<Run, "scheduledRetryAttempt" | "scheduledRetryReason" | "contextSnapshot" | "startedAt">>,
 ): boolean {
   if (
     run.runtimeMode === "native" ||
@@ -23,6 +23,14 @@ export function legacyExecutionNeedsReconciliation(
     return false;
   // A fresh model turn cannot repair or verify unrestored files.
   if (run.resultJson?.workspaceRestoreFailure === "restore_unsafe_archive") return true;
+  // A queued run cancelled by an existing hold never started provider work.
+  // Keep the source blocker; do not open a second recovery incident.
+  if (
+    run.status === "cancelled" &&
+    run.errorCode === "execution_reconciliation_required" &&
+    !run.startedAt
+  )
+    return false;
   // A fresh conversation turn lets the agent decide what remains. The retry
   // scheduler, not an action-outcome hold, owns the automatic attempt limit.
   if (hasConversationContinuationPolicy(run.resultJson)) return false;
@@ -116,7 +124,8 @@ export async function terminalizeLegacyExecution(input: {
       task &&
       !isSupersededConversationRun(task, updated) &&
       (task.assigneeAgentId === run.agentId || isCurrentReviewer) &&
-      !["done", "cancelled"].includes(task.status)
+      !["done", "cancelled"].includes(task.status) &&
+      legacyExecutionNeedsReconciliation(updated)
     ) {
       // Periodic stranded-work checks may revisit this terminal run before its
       // reconciled continuation is dispatched. Preserve the recorded decision
