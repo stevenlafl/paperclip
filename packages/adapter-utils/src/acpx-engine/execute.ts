@@ -363,7 +363,10 @@ export interface AcpxTerminalSessionFailure {
 export type AcpxTerminalFailureClassification = Pick<
   AdapterExecutionResult,
   "errorCode" | "errorFamily" | "retryNotBefore"
->;
+> & {
+  /** The provider session itself is unusable, such as a conversation that no longer fits the context window. */
+  clearSession?: boolean;
+};
 
 export interface AcpxEngineExecutorOptions {
   createRuntime?: AcpxRuntimeFactory;
@@ -4938,7 +4941,12 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
         // session so the next bounded turn receives the full task conversation.
         const sessionUnavailable = terminal.status === "failed" &&
           terminal.error.detailCode === "SESSION_RESUME_REQUIRED";
-        if (sessionUnavailable) clearSession = true;
+        // A classifier can mark the provider session itself as unusable, such as
+        // a conversation that no longer fits the context window. Resuming it
+        // would fail the same way, so the next turn starts a fresh session.
+        const sessionExhausted = terminal.status === "failed" &&
+          terminalFailureClassification?.clearSession === true;
+        if (sessionUnavailable || sessionExhausted) clearSession = true;
         // Saving a conversation is independent from certifying tool outcomes.
         // Its next turn receives history, not a replay of pending tool calls.
         preserveInterruptedSession = ctx.signal?.aborted === true && !forcedStop && !timedOut && !channelLost
@@ -4967,7 +4975,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
               : failedTurn
                 ? `paperclip turn ${terminal.status}`
                 : "paperclip completed turn cleanup",
-          discardPersistentState: sessionUnavailable || (terminal.status === "cancelled" && !preserveInterruptedSession) || timedOut || channelLost,
+          discardPersistentState: sessionUnavailable || sessionExhausted || (terminal.status === "cancelled" && !preserveInterruptedSession) || timedOut || channelLost,
           dropWarmEntry: false,
           recordCloseError: false,
           cancelTurnReason: null,
