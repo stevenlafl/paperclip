@@ -11,6 +11,48 @@
   <a href="https://paperclip.ing"><strong>Website</strong></a>
 </p>
 
+<!-- local-build:start -->
+> **This is `local`, an unofficial build of Paperclip.** It is upstream `master`
+> plus the changes below, which are not merged upstream yet. It is rebuilt and
+> force-pushed whenever `master` moves. Not affiliated with the Paperclip project.
+> Each change is one commit here and also lives on its own branch in this repository.
+>
+> | Change | Branch | Source | Author |
+> |---|---|---|---|
+> | Stage git-ref installs the way release.sh stages packages | [`pr/13928`](https://github.com/stevenlafl/paperclip/tree/pr/13928) | [#13928](https://github.com/paperclipai/paperclip/pull/13928) | @oliver-mee |
+> | Refresh Claude subscription credentials from the credential document | [`pr/13726`](https://github.com/stevenlafl/paperclip/tree/pr/13726) | [#13726](https://github.com/paperclipai/paperclip/pull/13726) | @vobornik |
+> | Keep one managed AI home per agent and grant so runs resume their provider session | [`fix/managed-ai-stable-home`](https://github.com/stevenlafl/paperclip/tree/fix/managed-ai-stable-home) | fixes [#14134](https://github.com/paperclipai/paperclip/issues/14134) | @stevenlafl |
+> | Edit and unbind agents from AI connections | [`pr/14027`](https://github.com/stevenlafl/paperclip/tree/pr/14027) | [#14027](https://github.com/paperclipai/paperclip/pull/14027) | @VishvakR |
+> | Drop a stale wait-for-review Next Action on resume | [`fix/stale-review-next-action`](https://github.com/stevenlafl/paperclip/tree/fix/stale-review-next-action) | part of [#12055](https://github.com/paperclipai/paperclip/pull/12055) (closed) | @trelmitt, test by @stevenlafl |
+> | Cancel a review-parked continuation only while review is live | [`fix/review-wait-requires-live-posture`](https://github.com/stevenlafl/paperclip/tree/fix/review-wait-requires-live-posture) | rewrite of [#11614](https://github.com/paperclipai/paperclip/pull/11614) for current code | @stevenlafl, from @dzianisv |
+> | Release a settled no-replay hold once and show it to the board | [`pr/14156`](https://github.com/stevenlafl/paperclip/tree/pr/14156) | [#14156](https://github.com/paperclipai/paperclip/pull/14156) | @rpridal |
+> | No second recovery action for a wake cancelled before it started | [`fix/prestart-cancel-no-second-recovery`](https://github.com/stevenlafl/paperclip/tree/fix/prestart-cancel-no-second-recovery) | part of [#13332](https://github.com/paperclipai/paperclip/pull/13332) | @alexanderkiehl |
+> | Re-admit a wake parked by a gate that has gone away | [`pr/13769`](https://github.com/stevenlafl/paperclip/tree/pr/13769) | [#13769](https://github.com/paperclipai/paperclip/pull/13769) | @MrBlackTongue |
+> | Re-admit a recovery-backed wake once its hold stops holding | [`fix/readmit-recovery-backed-waits`](https://github.com/stevenlafl/paperclip/tree/fix/readmit-recovery-backed-waits) | follow-up to [#13769](https://github.com/paperclipai/paperclip/pull/13769) | @stevenlafl |
+> | Accept a card answer sent with Interrupt as queued-message authority | [`fix/card-answer-interrupt-authority`](https://github.com/stevenlafl/paperclip/tree/fix/card-answer-interrupt-authority) | fixes [#14043](https://github.com/paperclipai/paperclip/issues/14043) | @stevenlafl |
+> | Hide comments queued for an agent's next turn from its current run on that task | [`fix/hide-queued-comments-from-own-run`](https://github.com/stevenlafl/paperclip/tree/fix/hide-queued-comments-from-own-run) | new | @stevenlafl |
+> | Show queued messages as plain text without markdown escapes | [`fix/queued-tray-markdown-escapes`](https://github.com/stevenlafl/paperclip/tree/fix/queued-tray-markdown-escapes) | new | @stevenlafl |
+> | Keep a named addressee's card wake on an issue assigned to another agent | [`pr/13211`](https://github.com/stevenlafl/paperclip/tree/pr/13211) | [#13211](https://github.com/paperclipai/paperclip/pull/13211), test made deterministic | @lucasantoro97 |
+> | Steer queued messages into a running direct-adapter turn over ACP _session/steering | [`feat/direct-adapter-steering`](https://github.com/stevenlafl/paperclip/tree/feat/direct-adapter-steering) | new (includes an acpx@0.12.0 patch) | @stevenlafl |
+> | Start a fresh provider session when the saved one cannot be resumed | [`fix/acpx-reset-record-on-fresh-session`](https://github.com/stevenlafl/paperclip/tree/fix/acpx-reset-record-on-fresh-session) | fixes [#14053](https://github.com/paperclipai/paperclip/issues/14053) | @stevenlafl |
+> | Start a fresh Claude ACP session after a context overflow | [`fix/claude-acp-context-overflow-fresh-session`](https://github.com/stevenlafl/paperclip/tree/fix/claude-acp-context-overflow-fresh-session) | [#7733](https://github.com/paperclipai/paperclip/issues/7733) on the ACP path | @stevenlafl |
+> | Bound launch environments and continuation history | [`pr/14092`](https://github.com/stevenlafl/paperclip/tree/pr/14092) | [#14092](https://github.com/paperclipai/paperclip/pull/14092) | @biwhite |
+> | Make agent role editable after creation | [`pr/10862`](https://github.com/stevenlafl/paperclip/tree/pr/10862) | [#10862](https://github.com/paperclipai/paperclip/pull/10862), test updated for current master | @lucktastic |
+> | Correct the enableNativeRunner default in the deploy docs | [`docs/native-runner-default`](https://github.com/stevenlafl/paperclip/tree/docs/native-runner-default) | new | @stevenlafl |
+> | Advance the event counter when run-dispatch fixtures seed an event | [`fix/run-dispatch-test-event-seq`](https://github.com/stevenlafl/paperclip/tree/fix/run-dispatch-test-event-seq) | new (test-only) | @stevenlafl |
+>
+> Install: released `paperclipai` CLIs cannot build a git-ref install until upstream
+> merges [#13928](https://github.com/paperclipai/paperclip/pull/13928), so the first install runs the fixed installer from a clone:
+>
+>     git clone git@github.com:stevenlafl/paperclip.git && cd paperclip && git switch local
+>     pnpm install --frozen-lockfile
+>     node cli/node_modules/tsx/dist/cli.mjs cli/src/index.ts install --repo stevenlafl/paperclip --ref local
+>
+> After that the installed CLI includes the fix: `paperclipai update` follows this branch,
+> and once #13928 is released, `paperclipai install --repo stevenlafl/paperclip --ref local` works directly.
+<!-- local-build:end -->
+
+
 <p align="center">
   <a href="https://github.com/paperclipai/paperclip/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT License" /></a>
   <a href="https://github.com/paperclipai/paperclip/stargazers"><img src="https://img.shields.io/github/stars/paperclipai/paperclip?style=flat" alt="Stars" /></a>
