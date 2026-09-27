@@ -3926,6 +3926,8 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
     let releaseStagingLease: (() => void) | null = null;
     let stopTimer: ReturnType<typeof setTimeout> | undefined;
     let removeStopListener: (() => void) | undefined;
+    // Withdraws this run's steering offer (set in `stepTurnStart`).
+    let clearSteering: (() => void) | undefined;
     // Unregisters the sandbox duplex bridge's loss listener (below, in
     // `stepTurnStart`). Set only on a sandbox target whose bridge exposes
     // `onLoss`; stays undefined everywhere else, so the cleanup call is a
@@ -4764,6 +4766,19 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
             : {}),
         });
         activeTurn = turn;
+        // Offer this turn to the server for steered board input when the local
+        // runtime can deliver it (`_session/steering`, via the patched acpx).
+        // Support is asked per request: the agent advertises it at initialize,
+        // which the runtime may not have finished when the turn starts.
+        const steerRuntime = runtime;
+        const steerHandle = sessionHandle;
+        if (ctx.onSteeringChange && !prepared.processSessionBridge && steerRuntime.steer && steerRuntime.isSteeringSupported) {
+          ctx.onSteeringChange({
+            isSupported: async () => await steerRuntime.isSteeringSupported!({ handle: steerHandle }).catch(() => false),
+            steer: async (text) => (await steerRuntime.steer!({ handle: steerHandle, text })).outcome,
+          });
+          clearSteering = () => ctx.onSteeringChange?.(null);
+        }
         // A latched sandbox duplex-channel loss otherwise has no way to reach
         // this turn: the bridge only exposes a pull read, and the engine
         // pulls it at the terminal-finalization boundary, which runs only
@@ -5429,6 +5444,7 @@ export function createAcpxEngineExecutor(deps: AcpxEngineExecutorOptions = {}) {
       clearTimeout(stopTimer);
       removeStopListener?.();
       removeLossListener?.();
+      clearSteering?.();
       clearTimeout(lossDeadlineTimer);
       // End the run root span exactly once, on every return and on a throw.
       runRootSpan.end(runFailed);

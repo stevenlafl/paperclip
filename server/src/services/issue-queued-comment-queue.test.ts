@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import { buildQueuedCommentQueueSnapshot, decideQueuedCommentQueueSteering } from "./issue-queued-comment-queue.js";
 
 describe("decideQueuedCommentQueueSteering", () => {
-  it("answers unsupported on the legacy protocol", () => {
+  it("asks the caller to probe a running deferred turn on the legacy protocol", () => {
+    // Direct-adapter turns can take steered input when their adapter registered
+    // it; only the live registry knows, so the caller probes.
     const decision = decideQueuedCommentQueueSteering({
       state: "deferred",
       queueRunRuntimeMode: null,
@@ -11,7 +13,20 @@ describe("decideQueuedCommentQueueSteering", () => {
       queuedCommentCount: 1,
     });
 
-    expect(decision).toEqual({ protocol: "legacy", kind: "unsupported" });
+    expect(decision).toEqual({ protocol: "legacy", kind: "probe", steeringRunId: "run-1" });
+  });
+
+  it("answers unsupported on the legacy protocol without a running deferred turn", () => {
+    for (const facts of [
+      { state: "queued" as const, activeRun: null, queuedCommentCount: 1 },
+      { state: "deferred" as const, activeRun: { id: "run-1", runtimeMode: "legacy" }, queuedCommentCount: 0 },
+    ]) {
+      expect(decideQueuedCommentQueueSteering({
+        ...facts,
+        queueRunRuntimeMode: "legacy",
+        assignedAgentAdapterType: "claude_local",
+      })).toEqual({ protocol: "legacy", kind: "unsupported" });
+    }
   });
 
   it("answers temporarily_unavailable for a promoted native queue with no deferred run", () => {

@@ -103,8 +103,12 @@ export type QueuedCommentQueueProtocol = "paperclip_runner_v1" | "legacy";
 export type QueuedCommentQueueSteeringDecision =
   | { protocol: QueuedCommentQueueProtocol; kind: "unsupported" }
   | { protocol: QueuedCommentQueueProtocol; kind: "temporarily_unavailable" }
-  /** Only the caller can probe the live runner. `steeringRunId` names the run to probe. */
-  | { protocol: "paperclip_runner_v1"; kind: "probe"; steeringRunId: string };
+  /**
+   * Only the caller can probe the live run. `steeringRunId` names the run to
+   * probe: a native session for `paperclip_runner_v1`, the adapter's registered
+   * turn steering for `legacy`.
+   */
+  | { protocol: QueuedCommentQueueProtocol; kind: "probe"; steeringRunId: string };
 
 /**
  * Decides the queue protocol and the steering answer for one queued-comment
@@ -142,11 +146,16 @@ export function decideQueuedCommentQueueSteering(facts: {
       ? "paperclip_runner_v1"
       : "legacy";
 
+  const steeringRun = facts.state === "deferred" ? facts.activeRun : null;
   if (protocol !== "paperclip_runner_v1") {
-    return { protocol, kind: "unsupported" };
+    // A direct-adapter turn can take steered input only when its adapter
+    // registered it (`getAdapterTurnSteeringState`), so only a live deferred
+    // queue is worth asking about.
+    return steeringRun && facts.queuedCommentCount > 0
+      ? { protocol, kind: "probe", steeringRunId: steeringRun.id }
+      : { protocol, kind: "unsupported" };
   }
 
-  const steeringRun = facts.state === "deferred" ? facts.activeRun : null;
   if (!steeringRun || facts.queuedCommentCount === 0) {
     return { protocol, kind: "temporarily_unavailable" };
   }

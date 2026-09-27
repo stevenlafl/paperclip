@@ -10,6 +10,8 @@ export type {
   AdapterRuntimeMcpServer,
   AdapterRuntimeMcpAccess,
   AdapterExecutionContext,
+  AdapterSteeringOutcome,
+  AdapterTurnSteering,
   AdapterRuntimeToolAccess,
   AdapterRuntimeToolDelivery,
   AdapterEnvironmentCheckLevel,

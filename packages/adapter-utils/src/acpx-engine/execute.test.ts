@@ -10,6 +10,7 @@ import {
   startAdapterExecutionTargetPaperclipBridge,
   startAdapterExecutionTargetProcessSessionBridge,
 } from "@paperclipai/adapter-utils/execution-target";
+import type { AdapterTurnSteering } from "@paperclipai/adapter-utils";
 
 // Wrap the staging seam + both sandbox bridges in call-recording spies that
 // still delegate to the real implementations (a runner-backed sandbox test
@@ -933,6 +934,63 @@ describe("shared ACPX engine runtime behavior", () => {
         tag: "agent_message_chunk",
       })}\n`,
     });
+  });
+
+  it("offers the running turn for steered input and withdraws it when the run settles", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const steered: Array<{ handle: unknown; text: string }> = [];
+    const offers: Array<AdapterTurnSteering | null> = [];
+    let releaseTurn!: () => void;
+    const turnReleased = new Promise<void>((resolve) => { releaseTurn = resolve; });
+    let steeringOffered!: () => void;
+    const offered = new Promise<void>((resolve) => { steeringOffered = resolve; });
+    const execute = createAcpxEngineExecutor({
+      createRuntime: () => ({
+        ensureSession: async () => ({
+          backendSessionId: "backend-session",
+          agentSessionId: "agent-session",
+          runtimeSessionName: "runtime-session",
+        }),
+        startTurn: () => ({
+          events: (async function* () {
+            await turnReleased;
+            yield { type: "done", stopReason: "end_turn" };
+          })(),
+          result: turnReleased.then(() => ({ status: "completed", stopReason: "end_turn" })),
+          cancel: async () => {},
+        }),
+        isSteeringSupported: async () => true,
+        steer: async (input: { handle: unknown; text: string }) => {
+          steered.push(input);
+          return { outcome: "injected" };
+        },
+        close: async () => {},
+      }) as never,
+    });
+
+    const run = execute({
+      runId: "run-steerable-turn",
+      agent: { id: "agent-1", companyId: "company-1" },
+      runtime: {},
+      config: { agent: "custom", agentCommand: "node ./fake-acp.js", stateDir },
+      context: {},
+      onLog: async () => {},
+      onMeta: async () => {},
+      onSteeringChange: (steering: AdapterTurnSteering | null) => {
+        offers.push(steering);
+        if (steering) steeringOffered();
+      },
+    } as never);
+
+    await offered;
+    const steering = offers[0]!;
+    expect(await steering.isSupported()).toBe(true);
+    expect(await steering.steer("use the other fixture")).toBe("injected");
+    expect(steered).toEqual([{ handle: expect.anything(), text: "use the other fixture" }]);
+    releaseTurn();
+    expect((await run).exitCode).toBe(0);
+    expect(offers.at(-1)).toBeNull();
   });
 
   it("defaults run summaries to the final output segment without thought text", async () => {

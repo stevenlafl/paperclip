@@ -145,6 +145,25 @@ function SortableQueuedMessage({
         {label}
       </span>
 
+      {/* A direct-adapter (legacy) turn keeps Interrupt, and also offers Steer
+          when its agent can take the message into the running turn. */}
+      {queue.protocol === "legacy" && queue.steeringDisposition === "available" && !entry.source?.requiresFreshSession ? (
+        <button
+          type="button"
+          onClick={onSteer}
+          disabled={steerDisabled}
+          title={steerTitle}
+          className="flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
+          data-testid={`task-chat-queued-steer-${entry.comment.id}`}
+        >
+          {action === "steer" ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+          ) : (
+            <CornerDownRight className="h-3.5 w-3.5" aria-hidden />
+          )}
+          Steer
+        </button>
+      ) : null}
       {queue.protocol === "legacy" || entry.source?.requiresFreshSession ? (
         <button
           type="button"
