@@ -103,6 +103,16 @@ describe("TaskChatQueuedMessages", () => {
     expect(container.textContent).toContain("Second queued message");
   });
 
+  it("shows a queued message as plain text without markdown escapes", () => {
+    const body = "for the human\\_only card, what \\*exactly\\* would you say?";
+    const entry = { ...queue.entries[0], comment: { ...queue.entries[0].comment, body } };
+    render({ queue: { ...queue, entries: [entry] } });
+    const row = container.querySelector('[data-testid="task-chat-queued-message-comment-1"]');
+    expect(row?.textContent).toContain("for the human_only card, what *exactly* would you say?");
+    expect(row?.textContent).not.toContain("\\");
+    expect(row?.querySelector("[title]")?.getAttribute("title")).toBe("for the human_only card, what *exactly* would you say?");
+  });
+
   it.each(["legacy", "native", "native-plan"] as const)("shows a read-only response and sends it only on click for %s", async (runtime) => {
     const entry = { ...queue.entries[0], canEdit: false, canDiscard: false,
       comment: { ...queue.entries[0].comment, body: 'Accepted: Build the app\n\n{"revision": "v1"}' },
