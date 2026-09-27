@@ -101,6 +101,31 @@ describe("issue continuation summaries", () => {
     expect(continuationSummaryParksExecutor(body)).toBe(true);
   });
 
+  it("drops a carried-forward wait-for-review Next Action once the issue is back in progress", () => {
+    const previousSummaryBody = [
+      "# Continuation Summary",
+      "",
+      "## Next Action",
+      "",
+      "- Wait for reviewer feedback or approval before continuing executor work.",
+    ].join("\n");
+    const summaryFor = (status: string) => buildContinuationSummaryMarkdown({
+      issue: { id: "issue-1", identifier: "PAP-1579", title: "Add continuation summaries", description: null,
+        status, priority: "medium" },
+      run: { id: "run-3", status: "succeeded", error: null, resultJson: null },
+      agent: { id: "agent-1", name: "CodexCoder", adapterType: "codex_local" },
+      previousSummaryBody,
+    });
+
+    const resumed = summaryFor("in_progress");
+    expect(extractContinuationSummaryNextAction(resumed)).toBe(
+      "Resume implementation from the acceptance criteria, latest comments, and this summary.",
+    );
+    expect(continuationSummaryParksExecutor(resumed)).toBe(false);
+    // Outside in_progress the carried-forward line is left alone.
+    expect(continuationSummaryParksExecutor(summaryFor("todo"))).toBe(true);
+  });
+
   it("does not park executor work when the next action is still runnable", () => {
     const body = [
       "# Continuation Summary",
