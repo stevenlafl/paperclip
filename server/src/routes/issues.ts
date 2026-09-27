@@ -1,7 +1,10 @@
 import { queuedInteractionId, readQueuedInteractionResponse, hasQueuedInteractionResponse } from "../services/queued-interaction-response.js";
 import { deliverConversationComments, isConversation } from "../services/agent-conversations.js";
 import { issueRecoveryActionReadModel } from "../services/issue-recovery-actions.js";
-import { getExecutionBlocker } from "../services/execution-blocker.js";
+import {
+  getExecutionBlocker,
+  isSettledNoReplayHold,
+} from "../services/execution-blocker.js";
 import { extractIssueReferenceIdentifiers, requiresExecutionReconciliation } from "@paperclipai/shared";
 import {
   validateExecutionReconciliation,
@@ -4452,6 +4455,46 @@ export function issueRoutes(
       );
       return input.activeRecoveryAction ?? null;
     }
+  }
+
+  /**
+   * `executionBlocker` may point at a *settled* recovery action: a resolved
+   * no-replay hold still parks every wake, but it is no longer the "active"
+   * action this projection returned. The board then saw an issue with no
+   * action to resolve and no execution. Surface the referenced record
+   * read-only — no new authorization, same read gate as the active action.
+   *
+   * `resolvable` reuses the release helper's own predicate, so the client only
+   * offers a resolution control for a record that helper can actually retire.
+   */
+  async function referencedRecoveryActionForExecutionBlocker(input: {
+    issue: { id: string; companyId: string };
+    activeRecoveryAction: Awaited<ReturnType<typeof revalidateActiveSourceRecoveryForRead>>;
+  }): Promise<{ action: ReturnType<typeof issueRecoveryActionReadModel>; resolvable: boolean } | null> {
+    const blocker = await getExecutionBlocker(
+      db,
+      input.issue.companyId,
+      input.issue.id,
+    );
+    const referencedId = blocker?.recoveryActionId ?? null;
+    if (!referencedId || referencedId === input.activeRecoveryAction?.id)
+      return null;
+    const [row] = await db
+      .select()
+      .from(issueRecoveryActions)
+      .where(
+        and(
+          eq(issueRecoveryActions.id, referencedId),
+          eq(issueRecoveryActions.companyId, input.issue.companyId),
+          eq(issueRecoveryActions.sourceIssueId, input.issue.id),
+        ),
+      )
+      .limit(1);
+    if (!row) return null;
+    return {
+      action: issueRecoveryActionReadModel(row),
+      resolvable: isSettledNoReplayHold(row),
+    };
   }
 
   async function revalidateActiveSourceRecoveryAfterCommittedWrite(
@@ -9103,9 +9146,17 @@ export function issueRoutes(
       trigger: "read_projection",
       actor: getActorInfo(req),
     });
+    // A blocker can reference a settled action that is no longer "active".
+    // Without it the board has nothing to resolve and the issue looks idle.
+    const referenced = await referencedRecoveryActionForExecutionBlocker({
+      issue,
+      activeRecoveryAction: active,
+    });
     res.json({
       active,
-      actions: active ? [active] : [],
+      actions: active ? [active] : referenced ? [referenced.action] : [],
+      referencedByExecutionBlocker: referenced?.action.id ?? null,
+      referencedByExecutionBlockerResolvable: referenced?.resolvable ?? false,
     });
   });
 
