@@ -38,6 +38,15 @@ import {
 
 type QueueAction = "steer" | "interrupt" | "discard" | null;
 
+/**
+ * The composer stores markdown, which escapes characters such as `_` as `\_`.
+ * The thread renders that markdown; this one-line label shows plain text, so
+ * drop the backslash from markdown escapes instead of printing it.
+ */
+export function queuedMessageLabel(body: string): string {
+  return body.replace(/\\([\\`*_{}[\]()#+\-.!|~<>])/g, "$1");
+}
+
 export function reorderQueuedMessageEntries(
   entries: IssueQueuedCommentEntry[],
   activeId: string,
@@ -96,7 +105,8 @@ function SortableQueuedMessage({
   onDiscard: () => void;
 }) {
   const immutableResponse = entry.source?.kind === "interaction";
-  const label = immutableResponse ? entry.comment.body.split("\n")[0] : entry.comment.body;
+  const plainBody = queuedMessageLabel(entry.comment.body);
+  const label = immutableResponse ? plainBody.split("\n")[0] : plainBody;
   const sortable = useSortable({
     id: entry.comment.id,
     disabled: queueMutationDisabled || immutableResponse,
@@ -131,7 +141,7 @@ function SortableQueuedMessage({
         {...sortable.attributes}
         {...sortable.listeners}
         disabled={queueMutationDisabled || immutableResponse}
-        aria-label={`Reorder queued message: ${entry.comment.body}`}
+        aria-label={`Reorder queued message: ${plainBody}`}
         className="flex h-7 w-7 shrink-0 cursor-grab items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-40"
       >
         <GripVertical className="h-3.5 w-3.5" aria-hidden />
@@ -141,7 +151,7 @@ function SortableQueuedMessage({
         className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
         aria-hidden
       />
-      <span className="min-w-0 flex-1 truncate px-1" title={entry.comment.body}>
+      <span className="min-w-0 flex-1 truncate px-1" title={plainBody}>
         {label}
       </span>
 
@@ -188,7 +198,7 @@ function SortableQueuedMessage({
           !entry.canDiscard
         }
         title="Discard queued message"
-        aria-label={`Discard queued message: ${entry.comment.body}`}
+        aria-label={`Discard queued message: ${plainBody}`}
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
         data-testid={`task-chat-queued-discard-${entry.comment.id}`}
       >
@@ -205,7 +215,7 @@ function SortableQueuedMessage({
             type="button"
             disabled={queueMutationDisabled || immutableResponse}
             title="Queued message actions"
-            aria-label={`Queued message actions: ${entry.comment.body}`}
+            aria-label={`Queued message actions: ${plainBody}`}
             className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
           >
             <MoreHorizontal className="h-4 w-4" aria-hidden />
