@@ -194,11 +194,33 @@ export interface AdapterRuntimeEvent {
   payload?: Record<string, unknown>;
 }
 
+/** Outcome of delivering text into a running turn; only `injected` means delivered. */
+export type AdapterSteeringOutcome =
+  | "injected"
+  | "promptRequired"
+  | "startedNewTurn"
+  | "failed"
+  | "noActivePrompt"
+  | "noActiveTurn"
+  | "unsupported";
+
+/** Delivers board input into the adapter's running turn without starting a new one. */
+export interface AdapterTurnSteering {
+  /** Whether the running turn's agent accepts steered input now. */
+  isSupported(): Promise<boolean>;
+  steer(text: string): Promise<AdapterSteeringOutcome>;
+}
+
 export interface AdapterExecutionContext {
   /** Run-scoped operator cancellation; adapters must settle before returning. */
   signal?: AbortSignal;
   /** Opt in to signal-based cancellation before starting provider work. */
   onCancellationReady?: () => Promise<void>;
+  /**
+   * Adapters whose running turn can take steered input report it here when the
+   * turn starts, and report `null` once the run settles.
+   */
+  onSteeringChange?: (steering: AdapterTurnSteering | null) => void;
   /** Host-owned stop of this run's sandbox during setup or direct CLI execution. Resolves only after
    * provider termination is verified; never accepts an agent-selected lease. */
   stopRemoteStartup?: () => Promise<void>;

@@ -27,6 +27,7 @@ import { errorHandler } from "../middleware/index.js";
 import { issueRoutes } from "../routes/issues.js";
 import { heartbeatService } from "../services/heartbeat.js";
 import { issueService } from "../services/issues.js";
+import { setAdapterTurnSteering } from "../services/adapter-turn-steering.js";
 import { issueThreadInteractionService } from "../services/issue-thread-interactions.js";
 import { remoteTerminationReceipt } from "../services/remote-execution-termination.js";
 import { initializeRunIdentity, reconcileSteeredIdentity } from "../services/run-identity.js";
@@ -1284,6 +1285,49 @@ describeEmbeddedPostgres("issue queued-comment routes", () => {
     const queueAfterFailure = await request(app(seeded.companyId))
       .get(`/api/issues/${seeded.issueId}/queued-comments`);
     expect(queueAfterFailure.body.entries.map((entry: any) => entry.comment.id)).toEqual(seeded.commentIds);
+  });
+
+  it("steers a queued message into a running direct-adapter turn that registered steering", async () => {
+    const seeded = await seedQueue();
+    await db.update(agents).set({ adapterType: "claude_local" }).where(eq(agents.id, seeded.agentId));
+    await db.update(heartbeatRuns).set({ runtimeMode: "legacy" }).where(eq(heartbeatRuns.id, seeded.runId));
+
+    const unregistered = await request(app(seeded.companyId))
+      .get(`/api/issues/${seeded.issueId}/queued-comments`);
+    expect(unregistered.body).toMatchObject({ protocol: "legacy", steeringDisposition: "unsupported" });
+    const refused = await request(app(seeded.companyId))
+      .post(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}/steer`)
+      .send({ queueId: seeded.wakeId, targetRunId: seeded.runId, revision: unregistered.body.revision });
+    expect(refused.status).toBe(409);
+    expect(refused.body.details).toMatchObject({ code: "steering_unsupported" });
+
+    const steer = vi.fn(async () => "injected" as const);
+    setAdapterTurnSteering(seeded.runId, { isSupported: async () => true, steer });
+    try {
+      const available = await request(app(seeded.companyId))
+        .get(`/api/issues/${seeded.issueId}/queued-comments`);
+      expect(available.body).toMatchObject({ protocol: "legacy", steeringDisposition: "available" });
+
+      const steered = await request(app(seeded.companyId))
+        .post(`/api/issues/${seeded.issueId}/queued-comments/${seeded.commentIds[0]}/steer`)
+        .send({ queueId: seeded.wakeId, targetRunId: seeded.runId, revision: available.body.revision });
+
+      expect(steered.status, JSON.stringify(steered.body)).toBe(200);
+      expect(steer).toHaveBeenCalledTimes(1);
+      expect(steered.body.entries.map((entry: any) => entry.comment.id)).toEqual([seeded.commentIds[1]]);
+      const [steeredRun] = await db.select({ resultJson: heartbeatRuns.resultJson }).from(heartbeatRuns)
+        .where(eq(heartbeatRuns.id, seeded.runId));
+      expect((steeredRun!.resultJson as any).queuedSteeringAcknowledgements[seeded.commentIds[0]])
+        .toMatchObject({ status: "acknowledged", queueId: seeded.wakeId, turnId: seeded.runId });
+      const logged = await db.select({ details: activityLog.details }).from(activityLog)
+        .where(eq(activityLog.action, "issue.queued_comment_steered"));
+      expect(logged.map((row) => row.details)).toContainEqual(expect.objectContaining({
+        commentId: seeded.commentIds[0],
+        targetRunId: seeded.runId,
+      }));
+    } finally {
+      setAdapterTurnSteering(seeded.runId, null);
+    }
   });
 
   it("returns the persisted acknowledgement when the final steering response is retried", async () => {

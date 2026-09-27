@@ -343,6 +343,7 @@ import {
   NativeSessionSteeringError,
   steerNativeSession,
 } from "../services/native-runtime/native-session-executor.js";
+import { getAdapterTurnSteeringState, steerAdapterTurn } from "../services/adapter-turn-steering.js";
 import {
   buildQueuedCommentQueueSnapshot,
   decideQueuedCommentQueueSteering,
@@ -7094,7 +7095,9 @@ export function issueRoutes(
       input.issue.conversationAgentId ? "unsupported" : steering.kind !== "probe"
         ? steering.kind
         : input.steeringDisposition
-          ?? (await getNativeSessionSteeringState(steering.steeringRunId)
+          ?? (await (steering.protocol === "paperclip_runner_v1"
+            ? getNativeSessionSteeringState(steering.steeringRunId)
+            : getAdapterTurnSteeringState(steering.steeringRunId))
             .then((state) => state.disposition)
             .catch(() => "temporarily_unavailable" as const));
     const wait = queueState?.state === "deferred" ? readObject(readObject(wake?.payload).executionWait) : {};
@@ -15752,7 +15755,11 @@ export function issueRoutes(
             queueId: req.body.queueId,
             revision: req.body.revision,
           });
-          if (locked.queue.protocol !== "paperclip_runner_v1") {
+          const nativeSteering = locked.queue.protocol === "paperclip_runner_v1";
+          if (
+            !nativeSteering &&
+            (await getAdapterTurnSteeringState(locked.activeRun.id)).disposition !== "available"
+          ) {
             throw conflict("This runner does not support same-turn steering", {
               code: "steering_unsupported",
             });
@@ -15776,7 +15783,7 @@ export function issueRoutes(
             (await storedSteeringAcknowledgement(tx, steeringIdentity ?? {
               companyId: issue.companyId, runId: locked.activeRun.id, messageId: commentId,
             })) ??
-            (await steerNativeSession({
+            (await (nativeSteering ? steerNativeSession : steerAdapterTurn)({
               runId: locked.activeRun.id,
               message: entry.comment.body,
               correlationId: commentId,

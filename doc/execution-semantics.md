@@ -1304,6 +1304,13 @@ transport method that rejects steering does not grant that capability. The
 queued-message control remains mounted until the server accepts a steer request,
 so a rejected last-row action keeps its message and visible error.
 
+A direct-adapter (legacy) turn offers Steer beside Interrupt when its ACP agent
+advertises the `_session/steering` extension at initialize; the claude and codex
+ACP adapters do. Steer delivers the message into the running turn and never
+starts a new one. The agent's `injected` reply is the acknowledgement; any other
+outcome leaves the message queued for the next turn. The run stands in for its
+single turn, and the same revision, replay, identity, and activity rules apply.
+
 ### Preserve work across handoff and deliver requested files
 
 An agent handoff carries the interrupted run's authorized task history, completed
@@ -1394,7 +1401,8 @@ messages retain their existing edit, discard, and reorder behavior.
 
 - Normal run completion promotes the saved response once. The restart scan also
   finds stranded interaction receipts after the issue execution lock is released.
-- **Steer** explicitly delivers the saved response to a compatible native turn.
+- **Steer** explicitly delivers the saved response to a compatible native turn,
+  or to a running direct-adapter turn whose agent advertises steering.
   The acknowledgement consumes the receipt, so a retry cannot create a second
   delivery. It retains the existing run's execution identity.
 - **Interrupt** stops a legacy turn and starts a continuation with the typed

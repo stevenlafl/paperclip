@@ -359,4 +359,26 @@ describe("TaskChatQueuedMessages", () => {
       "Queued messages will be sent when the previous run has stopped.",
     );
   });
+
+  it("offers Steer beside Interrupt when a direct-adapter turn can take the message", async () => {
+    const onSteer = vi.fn().mockResolvedValue(undefined);
+    const onInterrupt = vi.fn().mockResolvedValue(undefined);
+    render({
+      queue: { ...queue, protocol: "legacy", steeringDisposition: "available" },
+      onSteer,
+      onInterrupt,
+    });
+
+    expect(
+      container.querySelector('[data-testid="task-chat-queued-interrupt-comment-1"]'),
+    ).not.toBeNull();
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="task-chat-queued-steer-comment-1"]')
+        ?.click();
+    });
+
+    expect(onSteer).toHaveBeenCalledWith("comment-1", "rev-1");
+    expect(onInterrupt).not.toHaveBeenCalled();
+  });
 });
