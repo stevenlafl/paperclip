@@ -316,10 +316,22 @@ async function prepareClaudeRemoteManagedHome(
   return { stagedRuntime, teardown: registerWorkspaceSyncBack(stagedRuntime) };
 }
 
+// Claude Code reports a conversation that no longer fits the model's context
+// window as "Prompt is too long". The provider rejects it as an invalid request,
+// which claude-agent-acp surfaces in the `request` category.
+const CLAUDE_CONTEXT_OVERFLOW_RE = /prompt is too long|exceeds? the (?:model's )?context window|maximum context length/i;
+
 export function classifyClaudeTerminalSessionFailure(
   failure: AcpxTerminalSessionFailure,
   now: Date,
 ): AcpxTerminalFailureClassification | null {
+  if (
+    (failure.category === "request" || failure.category === "limit") &&
+    CLAUDE_CONTEXT_OVERFLOW_RE.test([failure.title, failure.details].filter(Boolean).join("\n"))
+  ) {
+    // Resuming the same session would fail again; the next run must start fresh.
+    return { errorCode: "claude_context_overflow", clearSession: true };
+  }
   // `limit` also includes context, turn, rate and configured budget limits.
   // Only the provider's quota wording qualifies for a quota wait.
   if (failure.category !== "limit") return null;

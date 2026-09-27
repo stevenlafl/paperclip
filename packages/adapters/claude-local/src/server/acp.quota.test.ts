@@ -123,6 +123,25 @@ it.each([
   expect(logs).not.toContain(title);
 });
 
+it.each([
+  ["request", "oneshot"],
+  ["request", "persistent"],
+  ["limit", "persistent"],
+])("clears a Claude session that no longer fits the context window (%s, %s)", async (category, mode) => {
+  const title = "Prompt is too long";
+  const { result, logs } = await executeFailure(title, category, mode);
+  expect(result).toMatchObject({ exitCode: 1, errorCode: "claude_context_overflow", clearSession: true });
+  expect(result.errorFamily).toBeUndefined();
+  expect(JSON.stringify(result)).not.toContain(title);
+  expect(logs).not.toContain(title);
+  if (mode === "persistent") {
+    // The persisted record must not hand the same conversation to the next run.
+    const params = result.sessionParams as Record<string, unknown>;
+    const store = runnerAcpx.createRuntimeStore({ stateDir: String(params.stateDir) });
+    expect((await store.load(String(params.sessionKey)))?.acpx?.reset_on_next_ensure).toBe(true);
+  }
+});
+
 it("does not infer quota from the historical generic terminal-limit error", () => {
   expect(classifyClaudeTerminalSessionFailure({
     category: "limit",
